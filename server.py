@@ -17,7 +17,20 @@ async def handler(websocket):
     await broadcast(f"{name} has arrived")
     try:
         async for message in websocket:
-            await broadcast(f"{name} says: {message}")
+            parts = message.strip().split(" ", 1)
+            command = parts[0].lower()
+            rest = parts[1] if len(parts) > 1 else ""
+
+            if command == "say":
+                await broadcast(f"{name} says: {rest}")
+            elif command == "who":
+                names = ", ".join(connected.values())
+                await websocket.send(f"{names} are currently online")
+            elif command == "quit":
+                await websocket.send("wake up")
+                await websocket.close()
+            else:
+                await websocket.send(f"the command {command} does not exist")
     finally:
         del connected[websocket]
         await broadcast(f"{name} has left the realm")
