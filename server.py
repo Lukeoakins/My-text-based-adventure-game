@@ -1,18 +1,32 @@
-import asyncio 
+import asyncio
 from websockets.asyncio.server import serve
 
+connected = {}
+
+
+async def broadcast(text):
+    for websocket in list(connected):
+        await websocket.send(text)
+
+
 async def handler(websocket):
-    print("A player has joined")
+    await websocket.send("What is your name?")
+    name = await websocket.recv()
 
-    async for message in websocket:
-        print(f"received: {message}")
-        await websocket.send(f"you said: {message}")
+    connected[websocket] = name
+    await broadcast(f"{name} has arrived")
+    try:
+        async for message in websocket:
+            await broadcast(f"{name} says: {message}")
+    finally:
+        del connected[websocket]
+        await broadcast(f"{name} has left the realm")
 
-    print("player disconnected")
 
 async def main():
     async with serve(handler, "localhost", 8765):
         print("listening on ws://localhost:8765")
         await asyncio.get_running_loop().create_future()
+
 
 asyncio.run(main())
