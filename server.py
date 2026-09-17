@@ -24,6 +24,19 @@ async def broadcast(text):
     for websocket in list(connected):
         await websocket.send(text)
 
+def describe(player):
+    room = rooms[player["location"]]
+    exits = ", ".join(room["exits"])
+    return(f"{room['name']}\n\n"
+           f"{room['description']}\n\n"
+           f"exits: {exits}"
+
+    )
+async def to_room(location, text, exclude=None):
+    for websocket, player in list(connected.items()):
+        if player["location"] == location and websocket is not exclude:
+            await websocket.send(text)
+
 
 async def handler(websocket):
     await websocket.send("What is your name?")
@@ -46,13 +59,20 @@ async def handler(websocket):
                 await websocket.send("wake up")
                 await websocket.close()
             elif command == "look":
+                await websocket.send(describe(connected[websocket]))
+            elif command == "go":
                 player = connected[websocket]
-                room = rooms[player["location"]]
-                exits = ", ".join(room["exits"])
-                text = (f"{room['name']}\n\n"
-                        f"{room['description']}\n\n"
-                        f"exits: {exits}")
-                await websocket.send(text)
+                here = player["location"]
+                direction = rest.lower()
+
+                if direction not in rooms[here]["exits"]:
+                    await websocket.send("there is no obvious path")
+                else:
+                    destination = rooms[here]["exits"][direction]
+                    await to_room(here, f"{player['name']} leaves, {direction}.", exclude = websocket)
+                    player["location"] = destination
+                    await to_room(destination, f"{player['name']} arrives.", exclude = websocket)
+                    await websocket.send(describe(player))
             else:
                 await websocket.send(f"the command {command} does not exist")
     finally:
