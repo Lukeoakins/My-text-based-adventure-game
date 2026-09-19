@@ -1,5 +1,20 @@
 import asyncio
 from websockets.asyncio.server import serve
+import json
+import sqlite3
+from datetime import datetime, timezone
+
+db = sqlite3.connect("grimoire.db")
+db.execute("""
+    CREATE TABLE IF NOT EXISTS events (
+        id        INTEGER PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        actor     TEXT,
+        verb      TEXT NOT NULL,
+        payload   TEXT
+    )
+""")
+db.commit()
 
 connected = {}
 items = [
@@ -24,6 +39,18 @@ rooms = {
         "exits": {"south": "camp"}
     }
          }
+
+def log(actor, verb, **payload):
+    db.execute(
+        "INSERT INTO events (timestamp, actor, verb, payload) VALUES (?, ?, ?, ?)",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            actor,
+            verb,
+            json.dumps(payload),
+        ),
+    )
+    db.commit()
 
 async def broadcast(text):
     for websocket in list(connected):
@@ -68,6 +95,8 @@ async def handler(websocket):
     name = await websocket.recv()
 
     connected[websocket] = {"name" : name, "location" : "camp"}
+    player = connected[websocket]
+    log(name, "arrive", location="camp")
     await broadcast(f"{name} has arrived")
     try:
         async for message in websocket:
@@ -76,6 +105,7 @@ async def handler(websocket):
             rest = parts[1] if len(parts) > 1 else ""
 
             if command == "say":
+                log(player["name"], "say", text=rest, location=player["location"])
                 await broadcast(f"{name} says: {rest}")
             elif command == "who":
                 names = ", ".join(player["name"] for player in connected.values())
@@ -86,7 +116,6 @@ async def handler(websocket):
             elif command == "look":
                 await websocket.send(describe(connected[websocket]))
             elif command == "go":
-                player = connected[websocket]
                 here = player["location"]
                 direction = rest.lower()
 
@@ -96,30 +125,30 @@ async def handler(websocket):
                     destination = rooms[here]["exits"][direction]
                     await to_room(here, f"{player['name']} leaves, {direction}.", exclude = websocket)
                     player["location"] = destination
+                    log(player["name"], "go", direction=direction, frm=here, to=destination)
                     await to_room(destination, f"{player['name']} arrives.", exclude = websocket)
                     await websocket.send(describe(player))
             elif command == "take":
-                player = connected[websocket]
                 match = find_item(rest, items_in_room(player["location"]))
                 if match is None:
                     await websocket.send(f"There is no {rest} here")
                 else:
                     match["location"] = None
                     match["holder"] = player["name"]
+                    log(player["name"], "take", item=match["id"], location=player["location"])
                     await websocket.send(f"you have picked up the {match['name']}")
                     await to_room(player["location"], f"{player['name']} picked up {match['name']}.", exclude = websocket)
             elif command == "drop":
-                player = connected[websocket]
                 match = find_item(rest, items_held_by(player["name"]))
                 if match is None:
                     await websocket.send(f"you do not have any {rest}")
                 else:
                     match["holder"] = None
                     match["location"] = player["location"]
+                    log(player["name"], "drop", item=match["id"], location=player["location"])
                     await websocket.send(f"you have dropped {match['name']}")
                     await to_room(player["location"], f"{player['name']} has dropped {match['name']}.", exclude = websocket)
             elif command == "inventory":
-                player = connected[websocket]
                 carried = items_held_by(player['name'])
                 if not carried:
                     await websocket.send("you are not carrying anything")
@@ -130,6 +159,7 @@ async def handler(websocket):
             else:
                 await websocket.send(f"the command {command} does not exist")
     finally:
+        log(player["name"], "leave", location=player["location"])
         del connected[websocket]
         await broadcast(f"{name} has left the realm")
 
