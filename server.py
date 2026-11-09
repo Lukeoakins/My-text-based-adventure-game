@@ -40,6 +40,18 @@ rooms = {
     }
          }
 
+CARRY_LIMIT = 40
+def load_description(weight):
+    if weight == 0:
+        return "You are carrying nothing."
+    if weight < CARRY_LIMIT * 0.3:
+        return "You are carrying a slight load"
+    if weight < CARRY_LIMIT * 0.6:
+        return "you are carrying a decent load"
+    if weight < CARRY_LIMIT * 0.9:
+        return "you are carrying a severe load"
+    return "trying to move even a step is extremely uncomfortable"
+
 def log(actor, verb, **payload):
     db.execute(
         "INSERT INTO events (timestamp, actor, verb, payload) VALUES (?, ?, ?, ?)",
@@ -77,6 +89,15 @@ async def to_room(location, text, exclude=None):
     for websocket, player in list(connected.items()):
         if player["location"] == location and websocket is not exclude:
             await websocket.send(text)
+
+def find_player(name, location):
+    for websocket, player in connected.items():
+        if player["location"] == location and name.lower() in player["name"].lower():
+            return websocket, player
+    return None, None
+
+def carried_weight(name):
+    return sum(item["weight"] for item in items_held_by(name))
 
 def items_in_room(location):
     return[item for item in items if item["location"] == location]
@@ -132,6 +153,8 @@ async def handler(websocket):
                 match = find_item(rest, items_in_room(player["location"]))
                 if match is None:
                     await websocket.send(f"There is no {rest} here")
+                elif carried_weight(player["name"]) + match["weight"] > CARRY_LIMIT:
+                    await websocket.send("You cannot lift it with what you are already carrying.")
                 else:
                     match["location"] = None
                     match["holder"] = player["name"]
@@ -154,7 +177,29 @@ async def handler(websocket):
                     await websocket.send("you are not carrying anything")
                 else:
                     names = ", ".join(item["name"] for item in carried)
-                    await websocket.send(f"You are carrying: {names}")
+                    load = load_description(carried_weight(player["name"]))
+                    await websocket.send(f"You are carrying: {names}\n{load}")
+            elif command == "give":
+                if " to " not in rest:
+                    await websocket.send("give what, to whom?")
+                else:
+                    thing, target_name = rest.split(" to ", 1)
+                    match = find_item(thing, items_held_by(player["name"]))
+                    target_socket, target = find_player(target_name, player["location"])
+                    if match is None:
+                        await websocket.send(f"you do not have {rest}")
+                    elif target is None:
+                        await websocket.send(f"there is no player going by {target_name}")
+                    elif target is player:
+                        await websocket.send("you cannot send it to yourself")
+                    elif carried_weight(target["name"]) + match["weight"] > CARRY_LIMIT:
+                        await websocket.send(f"{target['name']} is carrying too much!")
+                    else:
+                        match["holder"] = target["name"]
+                        log(player["name"], "give", item=match["id"], to=target["name"])
+                        await websocket.send(f"you have given a {match["name"]} to {target["name"]}")
+                        await target_socket.send(f"{player['name']} gives you the {match['name']}.")
+                        await to_room(player["location"], f"{player["name"]} has given {target["name"]} {match["name"]}")
                     
             else:
                 await websocket.send(f"the command {command} does not exist")
